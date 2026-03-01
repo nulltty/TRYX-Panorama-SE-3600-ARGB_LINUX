@@ -33,6 +33,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     keepaliveStop: () => ipcRenderer.invoke('keepalive-stop'),
     onKeepaliveStatus: (callback) => ipcRenderer.on('keepalive-status', (event, status) => callback(status)),
     
+    // Rotation operations (Anti-Burnout)
+    startRotation: (config) => ipcRenderer.invoke('start-rotation', config),
+    stopRotation: () => ipcRenderer.invoke('stop-rotation'),
+    getRotationStatus: () => ipcRenderer.invoke('get-rotation-status'),
+    onRotationStatus: (callback) => ipcRenderer.on('rotation-status', (event, status) => callback(status)),
+    
     // Config operations
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (config) => ipcRenderer.invoke('save-config', config),

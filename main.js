@@ -64,6 +64,61 @@ async function stopKeepalive(reason = 'Manual stop') {
   return wasRunning;
 }
 
+// Rotation service for Anti-OLED-Burnout
+let rotationDevice = null;
+let rotationInterval = null;
+let rotationInfo = {
+  startTime: null,
+  files: [],
+  currentIndex: 0,
+  intervalSeconds: 60,
+  brightness: 75,
+  keepalive: true,
+  secondsLeft: 0
+};
+
+// Helper function to stop rotation
+async function stopRotation(reason = 'Manual stop') {
+  logger.info('ROTATION', `Stopping rotation: ${reason}`);
+  
+  if (rotationInterval) {
+    clearInterval(rotationInterval);
+    rotationInterval = null;
+    logger.success('ROTATION', 'Rotation interval cleared');
+  }
+  
+  if (rotationDevice && rotationDevice.isConnected()) {
+    try {
+      // Disconnect if not using keepalive
+      if (!rotationInfo.keepalive) {
+        await rotationDevice.disconnect();
+        logger.success('ROTATION', 'Rotation device disconnected');
+      }
+    } catch (e) {
+      logger.warn('ROTATION', `Failed to disconnect device: ${e.message}`);
+    }
+  }
+  
+  // Reset info
+  const wasRunning = rotationInfo.startTime !== null;
+  rotationInfo = {
+    startTime: null,
+    files: [],
+    currentIndex: 0,
+    intervalSeconds: 60,
+    brightness: 75,
+    keepalive: true,
+    secondsLeft: 0
+  };
+  rotationDevice = null;
+  
+  if (wasRunning) {
+    logger.info('ROTATION', 'Rotation stopped and cleaned up');
+  }
+  
+  return wasRunning;
+}
+
 function addDaemonLog(message, type = 'info') {
   const timestamp = new Date().toLocaleString();
   const log = { timestamp, message, type };
@@ -150,6 +205,15 @@ app.on('window-all-closed', () => {
       logger.info('APP', 'Keepalive stopped');
     }).catch(e => {
       logger.warn('APP', `Failed to stop keepalive: ${e.message}`);
+    });
+  }
+  
+  // Stop rotation if running
+  if (rotationInterval || rotationDevice) {
+    stopRotation('Application closing').then(() => {
+      logger.info('APP', 'Rotation stopped');
+    }).catch(e => {
+      logger.warn('APP', `Failed to stop rotation: ${e.message}`);
     });
   }
   
@@ -933,6 +997,239 @@ ipcMain.handle('keepalive-stop', async () => {
     logger.error('KEEPALIVE', `Failed to stop keepalive: ${error.message}`);
     return { success: false, error: error.message };
   }
+});
+
+// ============================================
+// ROTATION IPC HANDLERS (Anti-Burnout)
+// ============================================
+
+ipcMain.handle('start-rotation', async (event, { files, interval, brightness, keepalive }) => {
+  let device = null;
+  const requestId = Date.now();
+  
+  logger.info('ROTATION', `=== START ROTATION REQUEST #${requestId} ===`);
+  logger.debug('ROTATION', 'Request parameters:', {
+    files,
+    interval,
+    brightness,
+    keepalive,
+    timestamp: new Date().toISOString()
+  });
+  
+  try {
+    // Validate inputs
+    if (!files || files.length < 2) {
+      throw new Error('At least 2 media files are required for rotation');
+    }
+    
+    if (!interval || interval < 5 || interval > 3600) {
+      throw new Error('Interval must be between 5 and 3600 seconds');
+    }
+    
+    // Stop any existing rotation
+    const hadExisting = await stopRotation('Starting new rotation');
+    if (hadExisting) {
+      logger.info('ROTATION', 'Stopped existing rotation');
+    }
+    
+    // Get device port
+    logger.info('ROTATION', 'Getting device port...');
+    const port = await getDevicePort();
+    logger.success('ROTATION', `Device port found: ${port}`);
+    
+    // Create device instance
+    logger.info('ROTATION', `Creating device instance on ${port}`);
+    device = new Device(port, true);
+    
+    // Connect to device
+    logger.info('ROTATION', 'Connecting to device...');
+    const startConnect = Date.now();
+    await device.connect();
+    const connectTime = Date.now() - startConnect;
+    logger.success('ROTATION', `Connected successfully (${connectTime}ms)`);
+    
+    // Handshake
+    logger.info('ROTATION', 'Performing handshake...');
+    const startHandshake = Date.now();
+    const handshakeInfo = await device.handshake();
+    const handshakeTime = Date.now() - startHandshake;
+    logger.success('ROTATION', `Handshake successful (${handshakeTime}ms)`, handshakeInfo);
+
+    // Convert GIF filenames to MP4
+    logger.debug('ROTATION', 'Converting GIF filenames to MP4...');
+    const mediaFiles = files.map(file => {
+      if (Media.detectType(file) === MediaType.Gif) {
+        const converted = Media.getConvertedName(file);
+        logger.debug('ROTATION', `Converted ${file} -> ${converted}`);
+        return converted;
+      }
+      return file;
+    });
+    logger.info('ROTATION', `Media files to rotate: ${mediaFiles.join(', ')}`);
+
+    // Store rotation state
+    rotationDevice = device;
+    rotationInfo = {
+      startTime: Date.now(),
+      files: mediaFiles,
+      currentIndex: 0,
+      intervalSeconds: interval,
+      brightness: brightness || 75,
+      keepalive: keepalive,
+      secondsLeft: interval
+    };
+
+    logger.info('ROTATION', `Starting rotation with ${mediaFiles.length} files, ${interval}s interval`);
+    
+    // Display first file
+    const firstFile = mediaFiles[0];
+    const screenConfig = {
+      media: [firstFile],
+      ratio: '2:1',
+      screen_mode: 'Full Screen',
+      play_mode: 'Single'
+    };
+    
+    logger.info('ROTATION', `Displaying first file: ${firstFile}`);
+    await device.setScreenConfig(screenConfig);
+    
+    if (brightness !== undefined) {
+      logger.info('ROTATION', `Setting brightness to ${brightness}%...`);
+      await device.setBrightness(brightness);
+    }
+
+    // Start rotation interval
+    let secondsElapsed = 0;
+    rotationInterval = setInterval(async () => {
+      try {
+        secondsElapsed++;
+        rotationInfo.secondsLeft = Math.max(0, rotationInfo.intervalSeconds - secondsElapsed);
+        
+        // Time to switch to next media
+        if (secondsElapsed >= rotationInfo.intervalSeconds) {
+          // Move to next file
+          rotationInfo.currentIndex = (rotationInfo.currentIndex + 1) % rotationInfo.files.length;
+          const nextFile = rotationInfo.files[rotationInfo.currentIndex];
+          
+          logger.info('ROTATION', `Switching to media [${rotationInfo.currentIndex + 1}/${rotationInfo.files.length}]: ${nextFile}`);
+          
+          // Set new file
+          const config = {
+            media: [nextFile],
+            ratio: '2:1',
+            screen_mode: 'Full Screen',
+            play_mode: 'Single'
+          };
+          
+          await rotationDevice.setScreenConfig(config);
+          
+          // Maintain brightness
+          if (rotationInfo.brightness !== undefined) {
+            await rotationDevice.setBrightness(rotationInfo.brightness);
+          }
+          
+          // Reset timer
+          secondsElapsed = 0;
+          rotationInfo.secondsLeft = rotationInfo.intervalSeconds;
+          
+          logger.success('ROTATION', `Switched successfully to ${nextFile}`);
+        }
+        
+        // Send status update to renderer
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('rotation-status', {
+            active: true,
+            currentMedia: rotationInfo.files[rotationInfo.currentIndex],
+            secondsLeft: rotationInfo.secondsLeft,
+            fileIndex: rotationInfo.currentIndex + 1,
+            totalFiles: rotationInfo.files.length
+          });
+        }
+      } catch (error) {
+        logger.error('ROTATION', `Error during rotation cycle: ${error.message}`);
+        // Continue rotation even if one cycle fails
+      }
+    }, 1000); // Update every second for smooth countdown
+
+    logger.success('ROTATION', 'Rotation started successfully');
+    
+    return { 
+      success: true, 
+      output: `Rotation started! ${mediaFiles.length} media files, ${interval}s interval` 
+    };
+  } catch (error) {
+    logger.error('ROTATION', `Failed to start rotation: ${error.message}`);
+    
+    // Cleanup on error
+    if (rotationInterval) {
+      clearInterval(rotationInterval);
+      rotationInterval = null;
+    }
+    
+    if (device && device.isConnected()) {
+      try {
+        await device.disconnect();
+      } catch (e) {
+        logger.warn('ROTATION', `Failed to disconnect on error: ${e.message}`);
+      }
+    }
+    
+    rotationDevice = null;
+    rotationInfo = {
+      startTime: null,
+      files: [],
+      currentIndex: 0,
+      intervalSeconds: 60,
+      brightness: 75,
+      keepalive: true,
+      secondsLeft: 0
+    };
+    
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('stop-rotation', async () => {
+  try {
+    const wasRunning = await stopRotation('User requested stop');
+    
+    if (wasRunning) {
+      logger.info('ROTATION', 'Rotation stopped by user');
+      
+      // Send status update to renderer
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('rotation-status', {
+          active: false,
+          currentMedia: '-',
+          secondsLeft: 0,
+          fileIndex: 0,
+          totalFiles: 0
+        });
+      }
+      
+      return { success: true, output: 'Rotation stopped successfully' };
+    } else {
+      return { success: false, error: 'Rotation is not running' };
+    }
+  } catch (error) {
+    logger.error('ROTATION', `Failed to stop rotation: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-rotation-status', () => {
+  const isActive = rotationInfo.startTime !== null && rotationInterval !== null;
+  
+  return {
+    success: true,
+    active: isActive,
+    currentMedia: isActive ? rotationInfo.files[rotationInfo.currentIndex] : '-',
+    secondsLeft: isActive ? rotationInfo.secondsLeft : 0,
+    fileIndex: isActive ? rotationInfo.currentIndex + 1 : 0,
+    totalFiles: isActive ? rotationInfo.files.length : 0,
+    uptime: isActive ? Date.now() - rotationInfo.startTime : 0,
+    interval: rotationInfo.intervalSeconds
+  };
 });
 
 // Helper functions

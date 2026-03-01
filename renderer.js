@@ -5,6 +5,11 @@ let selectedMediaFiles = new Set();
 let currentFilePath = null;
 let displayFilesLoaded = false;
 
+// Rotation state
+let rotationMediaFiles = new Set();
+let rotationActive = false;
+let rotationStatusInterval = null;
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
     initializeTabs();
@@ -16,6 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLogPath();
     // Load display files on first tab
     loadDisplayFiles();
+    // Load rotation media list
+    loadRotationMediaList();
     // Initialize ratio change handler to set initial preview state
     handleRatioChange();
 });
@@ -102,6 +109,19 @@ function initializeEventListeners() {
     // Listen for keepalive status updates from main process
     window.electronAPI.onKeepaliveStatus((status) => {
         updateKeepaliveStatusUI(status);
+    });
+
+    // Rotation controls
+    document.getElementById('start-rotation-btn').addEventListener('click', startRotation);
+    document.getElementById('stop-rotation-btn').addEventListener('click', stopRotation);
+    document.getElementById('refresh-rotation-list-btn').addEventListener('click', loadRotationMediaList);
+    document.getElementById('rotation-brightness').addEventListener('input', (e) => {
+        document.getElementById('rotation-brightness-value').textContent = e.target.value;
+    });
+
+    // Listen for rotation status updates from main process
+    window.electronAPI.onRotationStatus((status) => {
+        updateRotationStatusUI(status);
     });
 
     // Info tab
@@ -930,5 +950,220 @@ async function openLogFolder() {
         }
     } catch (error) {
         showToast(`Error: ${error.message}`, 'error');
+    }
+}
+// ============================================
+// ROTATION FUNCTIONS (Anti-Burnout Feature)
+// ============================================
+
+async function loadRotationMediaList() {
+    const listEl = document.getElementById('rotation-media-list');
+    
+    try {
+        const result = await window.electronAPI.listMedia();
+
+        if (result.success && result.files.length > 0) {
+            listEl.innerHTML = '';
+            
+            result.files.forEach(file => {
+                const label = document.createElement('label');
+                label.style.display = 'flex';
+                label.style.alignItems = 'center';
+                label.style.padding = '0.5rem 0';
+                label.style.borderBottom = '1px solid var(--border-color)';
+                label.style.cursor = 'pointer';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = file;
+                checkbox.style.marginRight = '0.75rem';
+                checkbox.style.cursor = 'pointer';
+                
+                // Restore checked state if file was previously selected
+                if (rotationMediaFiles.has(file)) {
+                    checkbox.checked = true;
+                }
+                
+                checkbox.addEventListener('change', (e) => {
+                    if (e.target.checked) {
+                        rotationMediaFiles.add(file);
+                    } else {
+                        rotationMediaFiles.delete(file);
+                    }
+                    updateStartRotationButton();
+                });
+                
+                const span = document.createElement('span');
+                span.textContent = file;
+                span.style.flex = '1';
+                
+                label.appendChild(checkbox);
+                label.appendChild(span);
+                listEl.appendChild(label);
+            });
+            
+            // Remove the last border
+            const lastLabel = listEl.querySelector('label:last-child');
+            if (lastLabel) {
+                lastLabel.style.borderBottom = 'none';
+            }
+        } else if (result.success && result.files.length === 0) {
+            listEl.innerHTML = '<p class="text-muted" style="margin: 0; padding: 0.5rem;">No media files found. Upload files first.</p>';
+        } else {
+            listEl.innerHTML = '<p class="text-muted" style="margin: 0; padding: 0.5rem;">Error loading media files</p>';
+        }
+    } catch (error) {
+        console.error('Failed to load rotation media list:', error);
+        listEl.innerHTML = '<p class="text-muted" style="margin: 0; padding: 0.5rem;">Error loading files</p>';
+    }
+}
+
+function updateStartRotationButton() {
+    const startBtn = document.getElementById('start-rotation-btn');
+    startBtn.disabled = rotationMediaFiles.size < 2;
+    
+    if (rotationMediaFiles.size < 2) {
+        startBtn.title = 'Select at least 2 media files to start rotation';
+    } else {
+        startBtn.title = '';
+    }
+}
+
+async function startRotation() {
+    // Validate selections
+    if (rotationMediaFiles.size < 2) {
+        showToast('Select at least 2 media files for rotation', 'error');
+        return;
+    }
+
+    const interval = parseInt(document.getElementById('rotation-interval').value);
+    const brightness = parseInt(document.getElementById('rotation-brightness').value);
+    const keepalive = document.getElementById('rotation-keepalive-check').checked;
+    const files = Array.from(rotationMediaFiles);
+
+    if (interval < 5 || interval > 3600) {
+        showToast('Rotation interval must be between 5 and 3600 seconds', 'error');
+        return;
+    }
+
+    const startBtn = document.getElementById('start-rotation-btn');
+    const stopBtn = document.getElementById('stop-rotation-btn');
+    const controls = document.querySelectorAll('#rotation-media-list input[type="checkbox"], #rotation-interval, #rotation-brightness, #rotation-keepalive-check, #refresh-rotation-list-btn');
+
+    startBtn.disabled = true;
+    startBtn.textContent = 'Starting...';
+    controls.forEach(el => el.disabled = true);
+
+    try {
+        const result = await window.electronAPI.startRotation({
+            files,
+            interval,
+            brightness,
+            keepalive
+        });
+
+        if (result.success) {
+            rotationActive = true;
+            showToast(`Rotation started! ${files.length} media files, ${interval}s interval`, 'success');
+            
+            // Update UI
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'inline-block';
+            stopBtn.disabled = false;
+            document.getElementById('rotation-status').style.display = 'block';
+            
+            // Update rotation count display
+            document.getElementById('rotation-count').textContent = files.length;
+            
+            // Start status updates
+            updateRotationStatus();
+            if (rotationStatusInterval) clearInterval(rotationStatusInterval);
+            rotationStatusInterval = setInterval(updateRotationStatus, 1000);
+        } else {
+            showToast(`Failed to start rotation: ${result.error}`, 'error');
+            startBtn.disabled = false;
+            startBtn.textContent = '▶️ Start Rotation';
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+        startBtn.disabled = false;
+        startBtn.textContent = '▶️ Start Rotation';
+    } finally {
+        controls.forEach(el => el.disabled = false);
+    }
+}
+
+async function updateRotationStatus() {
+    try {
+        const result = await window.electronAPI.getRotationStatus();
+        
+        if (result && result.success) {
+            updateRotationStatusUI(result);
+        }
+    } catch (error) {
+        console.error('Failed to update rotation status:', error);
+    }
+}
+
+function updateRotationStatusUI(status) {
+    if (!status) return;
+    
+    const statusText = document.getElementById('rotation-status-text');
+    const currentMedia = document.getElementById('rotation-current-media');
+    const nextSwitch = document.getElementById('rotation-next-switch');
+
+    if (status.active) {
+        statusText.textContent = '▶️ Running';
+        statusText.style.color = 'var(--success)';
+        currentMedia.textContent = status.currentMedia || '-';
+        nextSwitch.textContent = Math.max(0, status.secondsLeft || 0);
+    } else {
+        statusText.textContent = '⏹️ Stopped';
+        statusText.style.color = 'var(--error)';
+        currentMedia.textContent = '-';
+        nextSwitch.textContent = '-';
+    }
+}
+
+async function stopRotation() {
+    const startBtn = document.getElementById('start-rotation-btn');
+    const stopBtn = document.getElementById('stop-rotation-btn');
+    const controls = document.querySelectorAll('#rotation-media-list input[type="checkbox"], #rotation-interval, #rotation-brightness, #rotation-keepalive-check, #refresh-rotation-list-btn');
+
+    stopBtn.disabled = true;
+    stopBtn.textContent = 'Stopping...';
+    controls.forEach(el => el.disabled = true);
+
+    try {
+        const result = await window.electronAPI.stopRotation();
+
+        if (result.success) {
+            rotationActive = false;
+            showToast('Rotation stopped', 'success');
+            
+            // Update UI
+            stopBtn.style.display = 'none';
+            startBtn.style.display = 'inline-block';
+            startBtn.disabled = false;
+            startBtn.textContent = '▶️ Start Rotation';
+            document.getElementById('rotation-status').style.display = 'none';
+            updateStartRotationButton();
+            
+            // Stop status updates
+            if (rotationStatusInterval) {
+                clearInterval(rotationStatusInterval);
+                rotationStatusInterval = null;
+            }
+        } else {
+            showToast(`Failed to stop rotation: ${result.error}`, 'error');
+            stopBtn.disabled = false;
+            stopBtn.textContent = '⏹️ Stop Rotation';
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+        stopBtn.disabled = false;
+        stopBtn.textContent = '⏹️ Stop Rotation';
+    } finally {
+        controls.forEach(el => el.disabled = false);
     }
 }

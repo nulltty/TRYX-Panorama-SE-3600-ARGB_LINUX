@@ -70,7 +70,7 @@
                         <h3>Set Display</h3>
                         
                         <div class="form-group">
-                            <label for="display-file">Media File on Device:</label>
+                            <label for="display-file">Media File:</label>
                             <div class="file-input-group">
                                 <select id="display-file">
                                     <option value="">-- Select a media file --</option>
@@ -80,6 +80,16 @@
                             <small>Select from files on the device (auto-loads when tab opens)</small>
                         </div>
 
+                        <div class="form-group" id="display-file2-group" style="display: none;">
+                            <label for="display-file2">Media File 2 (Right):</label>
+                            <div class="file-input-group">
+                                <select id="display-file2" disabled>
+                                    <option value="">-- Not available --</option>
+                                </select>
+                            </div>
+                            <small>Dual video mode is currently disabled</small>
+                        </div>
+
                         <div class="form-group">
                             <label for="brightness-slider">Brightness: <span id="brightness-value">75</span>%</label>
                             <input type="range" id="brightness-slider" min="0" max="100" value="75" class="slider">
@@ -87,10 +97,10 @@
 
                         <div class="form-group">
                             <label for="ratio-select">Aspect Ratio:</label>
-                            <select id="ratio-select">
-                                <option value="2:1" selected>2:1 (Wide)</option>
-                                <option value="1:1">1:1 (Square)</option>
+                            <select id="ratio-select" disabled>
+                                <option value="2:1" selected>2:1 (Wide screen)</option>
                             </select>
+                            <small id="ratio-hint" style="display: block; margin-top: 0.5rem; color: var(--text-muted);">Display ratio: 2:1 (3600×1800)</small>
                         </div>
 
                         <div class="form-group checkbox-group">
@@ -106,7 +116,59 @@
                         </div>
                     </div>
 
-                    <div id="display-output" class="output-box" style="display: none;"></div>
+                    <div id="display-output" class="output-box" style="display: none;margin-bottom: 20px;"></div>
+                    
+                    <div class="card mt-4" id="preview-card" style="display: none;">
+                        <h3>🎬 Preview</h3>
+                        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 300px;">
+                                <div id="preview-container-1" style="background: var(--bg-dark); border-radius: 0.375rem; padding: 1rem; text-align: center; min-height: 200px; display: flex; align-items: center; justify-content: center;">
+                                    <div id="preview-info-1" class="text-muted">Select a file to preview</div>
+                                    <video id="preview-video-1" style="display: none; max-width: 100%; max-height: 300px; border-radius: 0.375rem;" controls loop muted></video>
+                                    <img id="preview-image-1" style="display: none; max-width: 100%; max-height: 300px; border-radius: 0.375rem;" />
+                                </div>
+                                <div id="preview-file-info-1" style="margin-top: 0.5rem; font-size: 0.85rem; color: var(--text-muted);"></div>
+                            </div>
+
+                        </div>
+                        <div style="margin-top: 1rem;">
+                            <button id="refresh-preview-btn" class="btn btn-secondary">🔄 Refresh Preview</button>
+                            <button id="clear-preview-btn" class="btn btn-secondary">🗑️ Clear Preview</button>
+                        </div>
+                    </div>
+                    
+                    <div class="card mt-4" id="keepalive-status-card" style="display: none;">
+                        <h3>🔄 Keepalive Status</h3>
+                        <div class="form-group">
+                            <div id="keepalive-status-info" style="padding: 1rem; background: var(--bg-light); border-radius: 0.375rem; margin-bottom: 1rem;">
+                                <p><strong>Status:</strong> <span id="keepalive-active-status">-</span></p>
+                                <p><strong>Handshakes:</strong> <span id="keepalive-count">0</span></p>
+                                <p><strong>Uptime:</strong> <span id="keepalive-uptime">-</span></p>
+                                <p><strong>Interval:</strong> <span id="keepalive-interval-sec">-</span>s</p>
+                                <p style="margin: 0;"><strong>Last Status:</strong> <span id="keepalive-last-message">-</span></p>
+                            </div>
+                            <button id="stop-keepalive-btn" class="btn btn-danger">⏹️ Stop Keepalive</button>
+                            <button id="refresh-keepalive-status-btn" class="btn btn-secondary">🔄 Refresh Status</button>
+                        </div>
+                    </div>
+                    
+                    <div class="card mt-4">
+                        <h3>Debug Logs</h3>
+                        <p class="text-muted">Log file untuk debugging set display dan keepalive functionality</p>
+                        
+                        <div class="form-group">
+                            <label>Log File Location:</label>
+                            <input type="text" id="log-file-path" readonly style="font-family: monospace; font-size: 0.9em;">
+                        </div>
+                        
+                        <div class="form-group">
+                            <button id="view-log-btn" class="btn btn-secondary">📄 View Log</button>
+                            <button id="clear-log-btn" class="btn btn-danger">🗑️ Clear Log</button>
+                            <button id="open-log-folder-btn" class="btn btn-secondary">📁 Open Log Folder</button>
+                        </div>
+                        
+                        <div id="log-viewer" class="output-box" style="display: none; max-height: 400px; font-family: monospace; font-size: 0.8em;"></div>
+                    </div>
                 </div>
 
                 <!-- Media Library Tab -->

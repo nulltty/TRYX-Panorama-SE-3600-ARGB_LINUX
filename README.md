@@ -11,12 +11,15 @@ _Inspired by [reed-tpse](https://github.com/fadli0029/reed-tpse) by [@fadli0029]
 ## Features
 
 - 🖥️ **Display Control** - Upload and set media files (videos, GIFs, images)
+- 🎬 **Dual Video Display** - Show 2 videos side by side with 1:1 aspect ratio (split screen)
 - 📁 **Media Library** - Browse and manage files on device
 - ⚙️ **Settings** - Configure port, brightness, and keepalive intervals
 - 🔄 **Daemon Management** - Control background service for persistent display
+- 🔄 **Keepalive Support** - Keep display active with periodic handshake (no more reset!)
 - ℹ️ **Device Info** - View detailed device information
 - 🎨 **Modern UI** - Dark theme with intuitive navigation
 - ⚡ **Native Implementation** - Direct serial communication via Node.js/serialport
+- 📝 **Debug Logging** - Comprehensive logging for troubleshooting
 
 ## Prerequisites
 
@@ -81,10 +84,26 @@ Packages will be created in the `dist/` directory.
 ### Tabs Overview
 
 - **Display**: Upload files and control what's shown on the display
+  - Single video mode (2:1 ratio)
+  - **Dual video mode** (1:1 ratio) - Display 2 videos side by side! ✨
 - **Media Library**: View, select, and delete files on device (via ADB)
 - **Settings**: Configure serial port, default brightness, and keepalive interval
 - **Daemon**: Start/stop background keepalive service
 - **Device Info**: View hardware and firmware information
+
+### 🎬 Dual Video Display (New!)
+
+Display 2 videos simultaneously in split screen mode:
+
+1. Select **Aspect Ratio: 1:1** in the Display tab
+2. Choose first video (Left) from the dropdown
+3. Choose second video (Right) from the second dropdown (appears automatically)
+4. Click "Set Display"
+5. Both videos will play side by side! 🎉
+
+**Use cases**: System monitoring, multi-camera view, comparison videos, dashboard displays
+
+See [DUAL_VIDEO.md](DUAL_VIDEO.md) for detailed documentation.
 
 ## Architecture
 

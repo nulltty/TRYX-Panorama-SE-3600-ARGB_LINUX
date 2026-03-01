@@ -7,6 +7,7 @@ const Device = require('./lib/device');
 const Adb = require('./lib/adb');
 const { Media, MediaType } = require('./lib/media');
 const ConfigManager = require('./lib/config');
+const logger = require('./lib/logger');
 
 let mainWindow;
 let daemonProcess = null;
@@ -18,6 +19,50 @@ let daemonInfo = {
   logs: [],
   keepaliveInterval: 10
 };
+
+// Keepalive connection from set-display
+let keepaliveDevice = null;
+let keepaliveInterval = null;
+let keepaliveInfo = {
+  startTime: null,
+  count: 0,
+  consecutiveFailures: 0
+};
+
+// Helper function to stop keepalive
+async function stopKeepalive(reason = 'Manual stop') {
+  logger.info('KEEPALIVE', `Stopping keepalive: ${reason}`);
+  
+  if (keepaliveInterval) {
+    clearInterval(keepaliveInterval);
+    keepaliveInterval = null;
+    logger.success('KEEPALIVE', 'Keepalive interval cleared');
+  }
+  
+  if (keepaliveDevice && keepaliveDevice.isConnected()) {
+    try {
+      await keepaliveDevice.disconnect();
+      logger.success('KEEPALIVE', 'Keepalive device disconnected');
+    } catch (e) {
+      logger.warn('KEEPALIVE', `Failed to disconnect device: ${e.message}`);
+    }
+    keepaliveDevice = null;
+  }
+  
+  // Reset info
+  const wasRunning = keepaliveInfo.startTime !== null;
+  keepaliveInfo = {
+    startTime: null,
+    count: 0,
+    consecutiveFailures: 0
+  };
+  
+  if (wasRunning) {
+    logger.info('KEEPALIVE', 'Keepalive stopped and cleaned up');
+  }
+  
+  return wasRunning;
+}
 
 function addDaemonLog(message, type = 'info') {
   const timestamp = new Date().toLocaleString();
@@ -36,6 +81,14 @@ function addDaemonLog(message, type = 'info') {
 }
 
 function createWindow() {
+  logger.info('APP', '=== TRYX PANORAMA SE CONTROLLER STARTED ===');
+  logger.info('APP', 'Application starting...', {
+    version: require('./package.json').version,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version
+  });
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -52,15 +105,21 @@ function createWindow() {
 
   // Hide menu bar completely
   mainWindow.setMenuBarVisibility(false);
-
+  // mainWindow.openDevTools({ mode: 'detach' });
   mainWindow.loadFile('index.html');
+  
+  mainWindow.webContents.on('did-finish-load', () => {
+    logger.success('APP', 'Window loaded successfully');
+  });
 
   // Open DevTools in development
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
+    logger.info('APP', 'Development mode: DevTools opened');
   }
 
   mainWindow.on('closed', () => {
+    logger.info('APP', 'Main window closed');
     mainWindow = null;
   });
 }
@@ -76,13 +135,26 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  logger.info('APP', 'All windows closed, cleaning up...');
+  
   // Stop daemon if running
   if (daemonInterval) {
     clearInterval(daemonInterval);
     daemonInterval = null;
+    logger.info('APP', 'Daemon stopped');
+  }
+  
+  // Stop keepalive if running
+  if (keepaliveInterval || keepaliveDevice) {
+    stopKeepalive('Application closing').then(() => {
+      logger.info('APP', 'Keepalive stopped');
+    }).catch(e => {
+      logger.warn('APP', `Failed to stop keepalive: ${e.message}`);
+    });
   }
   
   if (process.platform !== 'darwin') {
+    logger.info('APP', 'Quitting application');
     app.quit();
   }
 });
@@ -203,58 +275,258 @@ ipcMain.handle('upload-file', async (event, filePath) => {
 // Set display
 ipcMain.handle('set-display', async (event, { files, brightness, ratio, keepalive }) => {
   let device = null;
+  const requestId = Date.now();
+  
+  logger.info('SET_DISPLAY', `=== START SET DISPLAY REQUEST #${requestId} ===`);
+  logger.debug('SET_DISPLAY', 'Request parameters:', {
+    files,
+    brightness,
+    ratio,
+    keepalive,
+    timestamp: new Date().toISOString()
+  });
+  
   try {
+    // Get device port
+    logger.info('SET_DISPLAY', 'Getting device port...');
     const port = await getDevicePort();
+    logger.success('SET_DISPLAY', `Device port found: ${port}`);
+    
+    // Create device instance
+    logger.info('SET_DISPLAY', `Creating device instance on ${port}`);
     device = new Device(port, true);
     
+    // Connect to device
+    logger.info('SET_DISPLAY', 'Connecting to device...');
+    const startConnect = Date.now();
     await device.connect();
-    await device.handshake();
+    const connectTime = Date.now() - startConnect;
+    logger.success('SET_DISPLAY', `Connected successfully (${connectTime}ms)`);
+    
+    // Handshake
+    logger.info('SET_DISPLAY', 'Performing handshake...');
+    const startHandshake = Date.now();
+    const handshakeInfo = await device.handshake();
+    const handshakeTime = Date.now() - startHandshake;
+    logger.success('SET_DISPLAY', `Handshake successful (${handshakeTime}ms)`, handshakeInfo);
 
     // Convert GIF filenames to MP4
+    logger.debug('SET_DISPLAY', 'Converting GIF filenames to MP4...');
     const mediaFiles = files.map(file => {
       if (Media.detectType(file) === MediaType.Gif) {
-        return Media.getConvertedName(file);
+        const converted = Media.getConvertedName(file);
+        logger.debug('SET_DISPLAY', `Converted ${file} -> ${converted}`);
+        return converted;
       }
       return file;
     });
+    logger.info('SET_DISPLAY', `Media files to display: ${mediaFiles.join(', ')}`);
+
+    // Play mode is always Single (aspect ratio locked to 2:1)
+    const playMode = 'Single';
+    logger.info('SET_DISPLAY', 'Play mode: Single (aspect ratio locked to 2:1)');
 
     // Set screen config
-    await device.setScreenConfig({
+    logger.info('SET_DISPLAY', 'Setting screen configuration...');
+    const screenConfig = {
       media: mediaFiles,
       ratio: ratio || '2:1',
       screen_mode: 'Full Screen',
-      play_mode: 'Single'
-    });
+      play_mode: playMode
+    };
+    logger.debug('SET_DISPLAY', 'Screen config:', screenConfig);
+    
+    const startConfig = Date.now();
+    await device.setScreenConfig(screenConfig);
+    const configTime = Date.now() - startConfig;
+    logger.success('SET_DISPLAY', `Screen config set successfully (${configTime}ms)`);
 
     // Set brightness
     if (brightness !== undefined) {
+      logger.info('SET_DISPLAY', `Setting brightness to ${brightness}%...`);
+      const startBrightness = Date.now();
       await device.setBrightness(brightness);
+      const brightnessTime = Date.now() - startBrightness;
+      logger.success('SET_DISPLAY', `Brightness set successfully (${brightnessTime}ms)`);
+    } else {
+      logger.warn('SET_DISPLAY', 'Brightness not specified, skipping');
     }
 
     // Save state
-    ConfigManager.saveState({
+    logger.info('SET_DISPLAY', 'Saving display state...');
+    const state = {
       media: mediaFiles,
       ratio: ratio || '2:1',
       screen_mode: 'Full Screen',
-      play_mode: 'Single',
+      play_mode: playMode,
       brightness: brightness || 75
-    });
+    };
+    ConfigManager.saveState(state);
+    logger.success('SET_DISPLAY', 'State saved successfully', state);
 
-    const output = `Display set to: ${mediaFiles.join(', ')}\nBrightness: ${brightness}`;
-    
-    // If keepalive requested, keep connection
-    if (keepalive) {
-      // Note: For simplicity, we'll just return success. 
-      // Keepalive would require keeping device connection open
-      return { success: true, output: output + '\nKeeping connection alive...' };
+    // Build output message
+    let output = '';
+    if (mediaFiles.length > 1) {
+      output = `✨ Dual video mode activated!\nLeft: ${mediaFiles[0]}\nRight: ${mediaFiles[1]}\nBrightness: ${brightness}%\nRatio: ${ratio}`;
+    } else {
+      output = `Display set to: ${mediaFiles.join(', ')}\nBrightness: ${brightness}%\nRatio: ${ratio}`;
     }
     
+    // If keepalive requested, keep connection and start periodic handshake
+    if (keepalive) {
+      logger.info('SET_DISPLAY', '✅ KEEPALIVE REQUESTED - Starting periodic handshake');
+      
+      // Stop any existing keepalive first
+      const hadExisting = await stopKeepalive('Replacing with new keepalive');
+      if (hadExisting) {
+        logger.info('SET_DISPLAY', 'Stopped existing keepalive connection');
+      }
+      
+      // Get keepalive interval from config
+      const config = ConfigManager.loadConfig();
+      const intervalSeconds = config.keepalive_interval || 10;
+      
+      logger.info('SET_DISPLAY', `Setting up keepalive with ${intervalSeconds}s interval`);
+      
+      // Store device for keepalive
+      keepaliveDevice = device;
+      keepaliveInfo.startTime = Date.now();
+      keepaliveInfo.count = 0;
+      keepaliveInfo.consecutiveFailures = 0;
+      
+      logger.info('SET_DISPLAY', 'Device connection state:', {
+        isConnected: device.isConnected(),
+        port: device.getPort(),
+        willDisconnect: false
+      });
+      
+      // Setup periodic handshake
+      keepaliveInterval = setInterval(async () => {
+        keepaliveInfo.count++;
+        const count = keepaliveInfo.count;
+        
+        logger.info('KEEPALIVE', `=== Keepalive handshake #${count} START ===`);
+        logger.debug('KEEPALIVE', 'Device state before handshake:', {
+          isConnected: keepaliveDevice.isConnected(),
+          port: keepaliveDevice.getPort()
+        });
+        
+        try {
+          const startHandshake = Date.now();
+          await keepaliveDevice.handshake();
+          const handshakeTime = Date.now() - startHandshake;
+          
+          // Reset consecutive failures on success
+          keepaliveInfo.consecutiveFailures = 0;
+          
+          logger.success('KEEPALIVE', `Keepalive handshake #${count} successful (${handshakeTime}ms)`);
+          logger.debug('KEEPALIVE', 'Device state after handshake:', {
+            isConnected: keepaliveDevice.isConnected(),
+            port: keepaliveDevice.getPort()
+          });
+          
+          // Send notification to UI
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('keepalive-status', {
+              active: true,
+              count: count,
+              success: true,
+              message: `Keepalive #${count} successful`
+            });
+          }
+        } catch (e) {
+          keepaliveInfo.consecutiveFailures++;
+          
+          logger.error('KEEPALIVE', `Keepalive handshake #${count} failed: ${e.message}`, {
+            error: e.stack,
+            deviceState: {
+              isConnected: keepaliveDevice.isConnected(),
+              port: keepaliveDevice.getPort()
+            },
+            consecutiveFailures: keepaliveInfo.consecutiveFailures
+          });
+          logger.error('KEEPALIVE', '❌ This may cause display to reset!');
+          
+          // Send error notification to UI
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('keepalive-status', {
+              active: true,
+              count: count,
+              success: false,
+              message: `Keepalive #${count} failed: ${e.message} (${keepaliveInfo.consecutiveFailures} consecutive failures)`
+            });
+          }
+          
+          // Stop keepalive after 3 consecutive failures
+          if (keepaliveInfo.consecutiveFailures >= 3) {
+            logger.error('KEEPALIVE', `Stopping keepalive after ${keepaliveInfo.consecutiveFailures} consecutive failures`);
+            await stopKeepalive('Multiple consecutive handshake failures');
+            
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('keepalive-status', {
+                active: false,
+                count: count,
+                success: false,
+                message: 'Keepalive stopped due to repeated failures'
+              });
+            }
+          }
+        }
+        
+        logger.info('KEEPALIVE', `=== Keepalive handshake #${count} END ===`);
+      }, intervalSeconds * 1000);
+      
+      logger.success('SET_DISPLAY', `✅ Keepalive started successfully (interval: ${intervalSeconds}s)`);
+      logger.info('SET_DISPLAY', 'Periodic handshake will run to prevent display reset');
+      logger.info('SET_DISPLAY', '=== END SET DISPLAY REQUEST #' + requestId + ' (KEEPALIVE MODE) ===');
+      
+      return { 
+        success: true, 
+        output: output + `\n✅ Keepalive active (${intervalSeconds}s interval)\nDisplay will NOT reset` 
+      };
+    }
+    
+    logger.info('SET_DISPLAY', 'Keepalive NOT requested, will disconnect device');
+    logger.success('SET_DISPLAY', '=== END SET DISPLAY REQUEST #' + requestId + ' (SUCCESS) ===');
     return { success: true, output };
   } catch (error) {
+    logger.error('SET_DISPLAY', `Failed to set display: ${error.message}`, {
+      error: error.stack,
+      requestId
+    });
+    logger.error('SET_DISPLAY', '=== END SET DISPLAY REQUEST #' + requestId + ' (FAILED) ===');
+    
+    // Clean up device on error
+    if (device && device.isConnected()) {
+      try {
+        await device.disconnect();
+        logger.info('SET_DISPLAY', 'Device disconnected after error');
+      } catch (e) {
+        logger.warn('SET_DISPLAY', `Failed to disconnect after error: ${e.message}`);
+      }
+    }
+    
     return { success: false, error: error.message };
   } finally {
+    // Only disconnect if keepalive is NOT requested
     if (device && !keepalive) {
+      logger.info('SET_DISPLAY', 'Disconnecting device (keepalive=false)...');
+      const startDisconnect = Date.now();
       await device.disconnect();
+      const disconnectTime = Date.now() - startDisconnect;
+      logger.success('SET_DISPLAY', `Device disconnected (${disconnectTime}ms)`);
+      logger.debug('SET_DISPLAY', 'Device state after disconnect:', {
+        isConnected: device ? device.isConnected() : 'device is null'
+      });
+    } else if (device && keepalive) {
+      logger.info('SET_DISPLAY', '✅ Device NOT disconnected (keepalive=true)');
+      logger.info('SET_DISPLAY', 'Device will be managed by keepalive loop');
+      logger.debug('SET_DISPLAY', 'Device state (keepalive mode):', {
+        isConnected: device.isConnected(),
+        port: device.getPort()
+      });
+    } else if (!device) {
+      logger.debug('SET_DISPLAY', 'Device is null in finally block');
     }
   }
 });
@@ -296,6 +568,63 @@ ipcMain.handle('list-media', async () => {
 
     return { success: true, files };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Get preview for media file
+ipcMain.handle('get-media-preview', async (event, filename) => {
+  try {
+    // Validate device
+    const validation = await Adb.validateDevice();
+    if (!validation.valid) {
+      return { success: false, error: validation.reason };
+    }
+
+    // Create preview directory if not exists
+    const previewDir = path.join(require('os').tmpdir(), 'reed-tpse-preview');
+    if (!fs.existsSync(previewDir)) {
+      fs.mkdirSync(previewDir, { recursive: true });
+    }
+
+    // Local preview file path
+    const localPath = path.join(previewDir, filename);
+
+    // Pull file from device to local temp directory
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
+
+    const remotePath = `/sdcard/pcMedia/${filename}`;
+    
+    logger.info('PREVIEW', `Pulling file for preview: ${filename}`);
+    const startTime = Date.now();
+    
+    await execAsync(`adb pull "${remotePath}" "${localPath}"`);
+    
+    const pullTime = Date.now() - startTime;
+    logger.success('PREVIEW', `File pulled successfully (${pullTime}ms): ${filename}`);
+
+    // Get file stats
+    const stats = fs.statSync(localPath);
+    const fileSizeInMB = (stats.size / (1024 * 1024)).toFixed(2);
+
+    // Detect file type
+    const ext = path.extname(filename).toLowerCase();
+    let fileType = 'video';
+    if (['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(ext)) {
+      fileType = 'image';
+    }
+
+    return { 
+      success: true, 
+      path: localPath,
+      filename: filename,
+      size: fileSizeInMB + ' MB',
+      type: fileType
+    };
+  } catch (error) {
+    logger.error('PREVIEW', `Failed to get preview: ${error.message}`);
     return { success: false, error: error.message };
   }
 });
@@ -362,31 +691,51 @@ ipcMain.handle('validate-device', async () => {
 
 // Start daemon
 ipcMain.handle('daemon-start', async (event, foreground) => {
+  const daemonId = Date.now();
+  logger.info('DAEMON', `=== START DAEMON REQUEST #${daemonId} ===`);
+  logger.debug('DAEMON', 'Daemon parameters:', { foreground, timestamp: new Date().toISOString() });
+  
   try {
+    logger.info('DAEMON', 'Loading saved display state...');
     const state = ConfigManager.loadState();
     if (!state || state.media.length === 0) {
+      logger.error('DAEMON', 'No display state saved');
       return { success: false, error: 'No display state saved. Set display first.' };
     }
+    logger.success('DAEMON', 'Display state loaded', state);
 
+    logger.info('DAEMON', 'Loading configuration...');
     const config = ConfigManager.loadConfig();
+    logger.debug('DAEMON', 'Configuration:', config);
+    
+    logger.info('DAEMON', 'Detecting device port...');
     const port = config.port || await autoDetectDevice(false);
     
     if (!port) {
+      logger.error('DAEMON', 'Device not found');
       return { success: false, error: 'Device not found' };
     }
+    logger.success('DAEMON', `Device found: ${port}`);
 
     addDaemonLog('Starting daemon...', 'info');
     addDaemonLog(`Device port: ${port}`, 'info');
+    logger.info('DAEMON', 'Creating device instance...');
 
     // Start keepalive daemon
     const device = new Device(port, false);
+    
+    logger.info('DAEMON', 'Connecting to device...');
     await device.connect();
     addDaemonLog('Connected to device', 'success');
+    logger.success('DAEMON', 'Device connected');
     
-    await device.handshake();
+    logger.info('DAEMON', 'Performing handshake...');
+    const handshakeInfo = await device.handshake();
     addDaemonLog('Handshake successful', 'success');
+    logger.success('DAEMON', 'Handshake successful', handshakeInfo);
 
     // Set screen config
+    logger.info('DAEMON', 'Setting screen configuration...');
     await device.setScreenConfig({
       media: state.media,
       ratio: state.ratio,
@@ -394,52 +743,100 @@ ipcMain.handle('daemon-start', async (event, foreground) => {
       play_mode: state.play_mode
     });
     addDaemonLog(`Display configured: ${state.media.join(', ')}`, 'success');
+    logger.success('DAEMON', 'Screen config set');
     
+    logger.info('DAEMON', `Setting brightness to ${state.brightness}%...`);
     await device.setBrightness(state.brightness);
     addDaemonLog(`Brightness set: ${state.brightness}%`, 'success');
+    logger.success('DAEMON', 'Brightness set');
 
     // Store daemon info
     daemonInfo.startTime = Date.now();
     daemonInfo.port = port;
     daemonInfo.media = state.media;
     daemonInfo.keepaliveInterval = config.keepalive_interval || 10;
+    
+    logger.info('DAEMON', 'Daemon info stored:', daemonInfo);
 
     // Setup keepalive interval
+    logger.info('DAEMON', `Setting up keepalive interval: ${daemonInfo.keepaliveInterval}s`);
     let keepaliveCount = 0;
     daemonInterval = setInterval(async () => {
+      keepaliveCount++;
+      logger.info('DAEMON_KEEPALIVE', `=== Keepalive #${keepaliveCount} START ===`);
+      logger.debug('DAEMON_KEEPALIVE', 'Device state before handshake:', {
+        isConnected: device.isConnected(),
+        port: device.getPort()
+      });
+      
       try {
+        const startHandshake = Date.now();
         await device.handshake();
-        keepaliveCount++;
+        const handshakeTime = Date.now() - startHandshake;
+        
         addDaemonLog(`Keepalive #${keepaliveCount} successful`, 'info');
+        logger.success('DAEMON_KEEPALIVE', `Keepalive #${keepaliveCount} successful (${handshakeTime}ms)`);
+        logger.debug('DAEMON_KEEPALIVE', 'Device state after handshake:', {
+          isConnected: device.isConnected(),
+          port: device.getPort()
+        });
       } catch (e) {
         addDaemonLog(`Keepalive failed: ${e.message}`, 'error');
+        logger.error('DAEMON_KEEPALIVE', `Keepalive #${keepaliveCount} failed: ${e.message}`, {
+          error: e.stack,
+          deviceState: {
+            isConnected: device.isConnected(),
+            port: device.getPort()
+          }
+        });
+        logger.error('DAEMON_KEEPALIVE', 'This might cause display to reset!');
       }
+      
+      logger.info('DAEMON_KEEPALIVE', `=== Keepalive #${keepaliveCount} END ===`);
     }, daemonInfo.keepaliveInterval * 1000);
 
     addDaemonLog(`Daemon started. Keepalive interval: ${daemonInfo.keepaliveInterval}s`, 'success');
+    logger.success('DAEMON', `Daemon started successfully. Keepalive interval: ${daemonInfo.keepaliveInterval}s`);
+    logger.info('DAEMON', `=== END DAEMON REQUEST #${daemonId} (SUCCESS) ===`);
     return { success: true, output: 'Daemon started. Keepalive active.' };
   } catch (error) {
     addDaemonLog(`Failed to start daemon: ${error.message}`, 'error');
+    logger.error('DAEMON', `Failed to start daemon: ${error.message}`, {
+      error: error.stack,
+      daemonId
+    });
+    logger.error('DAEMON', `=== END DAEMON REQUEST #${daemonId} (FAILED) ===`);
     return { success: false, error: error.message };
   }
 });
 
 // Stop daemon
 ipcMain.handle('daemon-stop', async () => {
+  logger.info('DAEMON', '=== STOP DAEMON REQUEST ===');
+  
   try {
     if (daemonInterval) {
+      logger.info('DAEMON', 'Stopping daemon interval...');
       clearInterval(daemonInterval);
       daemonInterval = null;
+      logger.success('DAEMON', 'Daemon interval cleared');
       
       addDaemonLog('Daemon stopped', 'info');
+      logger.info('DAEMON', 'Daemon info before reset:', daemonInfo);
       
       // Reset daemon info
       daemonInfo.startTime = null;
       daemonInfo.port = null;
       daemonInfo.media = [];
       
+      logger.success('DAEMON', 'Daemon info reset');
+      logger.warn('DAEMON', 'NOTE: Device connection may still be open!');
+      logger.info('DAEMON', '=== DAEMON STOPPED SUCCESSFULLY ===');
+      
       return { success: true, output: 'Daemon stopped' };
     }
+    
+    logger.warn('DAEMON', 'Daemon not running');
     return { success: false, error: 'Daemon not running' };
   } catch (error) {
     return { success: false, error: error.message };
@@ -487,6 +884,53 @@ ipcMain.handle('daemon-logs', async () => {
   try {
     return { success: true, logs: daemonInfo.logs };
   } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Get keepalive status
+ipcMain.handle('keepalive-status', async () => {
+  try {
+    const isActive = keepaliveInterval !== null;
+    
+    if (isActive) {
+      const uptime = Date.now() - keepaliveInfo.startTime;
+      const uptimeStr = formatUptime(uptime);
+      const config = ConfigManager.loadConfig();
+      
+      return {
+        success: true,
+        active: true,
+        count: keepaliveInfo.count,
+        uptime: uptimeStr,
+        interval: config.keepalive_interval || 10,
+        port: keepaliveDevice ? keepaliveDevice.getPort() : 'unknown',
+        isConnected: keepaliveDevice ? keepaliveDevice.isConnected() : false
+      };
+    } else {
+      return {
+        success: true,
+        active: false
+      };
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Stop keepalive
+ipcMain.handle('keepalive-stop', async () => {
+  try {
+    const wasRunning = await stopKeepalive('User requested stop');
+    
+    if (wasRunning) {
+      logger.info('KEEPALIVE', 'Keepalive stopped by user');
+      return { success: true, output: 'Keepalive stopped successfully' };
+    } else {
+      return { success: false, error: 'Keepalive is not running' };
+    }
+  } catch (error) {
+    logger.error('KEEPALIVE', `Failed to stop keepalive: ${error.message}`);
     return { success: false, error: error.message };
   }
 });
@@ -572,5 +1016,42 @@ ipcMain.handle('check-cli', async () => {
       available: false, 
       error: error.message 
     };
+  }
+});
+
+// Get log file path
+ipcMain.handle('get-log-path', async () => {
+  try {
+    return { 
+      success: true, 
+      path: logger.getLogPath(),
+      dir: logger.getLogDir()
+    };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Read log file
+ipcMain.handle('read-log', async () => {
+  try {
+    const content = logger.readLog();
+    return { success: true, content };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Clear log file
+ipcMain.handle('clear-log', async () => {
+  try {
+    const cleared = logger.clearLog();
+    if (cleared) {
+      logger.info('LOG', 'Log file cleared by user');
+      return { success: true };
+    }
+    return { success: false, error: 'Failed to clear log' };
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });

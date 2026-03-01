@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Media operations
     listMedia: () => ipcRenderer.invoke('list-media'),
     deleteMedia: (files) => ipcRenderer.invoke('delete-media', files),
+    getMediaPreview: (filename) => ipcRenderer.invoke('get-media-preview', filename),
     rebootDevice: () => ipcRenderer.invoke('reboot-device'),
     validateDevice: () => ipcRenderer.invoke('validate-device'),
     
@@ -27,9 +28,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     daemonLogs: () => ipcRenderer.invoke('daemon-logs'),
     onDaemonLog: (callback) => ipcRenderer.on('daemon-log', (event, log) => callback(log)),
     
+    // Keepalive operations
+    keepaliveStatus: () => ipcRenderer.invoke('keepalive-status'),
+    keepaliveStop: () => ipcRenderer.invoke('keepalive-stop'),
+    onKeepaliveStatus: (callback) => ipcRenderer.on('keepalive-status', (event, status) => callback(status)),
+    
     // Config operations
     loadConfig: () => ipcRenderer.invoke('load-config'),
     saveConfig: (config) => ipcRenderer.invoke('save-config', config),
+    
+    // Log operations
+    getLogPath: () => ipcRenderer.invoke('get-log-path'),
+    readLog: () => ipcRenderer.invoke('read-log'),
+    clearLog: () => ipcRenderer.invoke('clear-log'),
     
     // Utility
     checkCLI: () => ipcRenderer.invoke('check-cli')

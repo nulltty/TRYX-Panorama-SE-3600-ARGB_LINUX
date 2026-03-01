@@ -12,8 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
     checkCLIAvailability();
     loadConfigToUI();
     updateDaemonStatus();
+    updateKeepaliveStatus();
+    loadLogPath();
     // Load display files on first tab
     loadDisplayFiles();
+    // Initialize ratio change handler to set initial preview state
+    handleRatioChange();
 });
 
 // Tab Navigation
@@ -49,6 +53,26 @@ function initializeEventListeners() {
     document.getElementById('set-display-btn').addEventListener('click', setDisplay);
     document.getElementById('set-brightness-btn').addEventListener('click', setBrightnessOnly);
     
+    // Ratio selection change handler (locked to 2:1)
+    document.getElementById('ratio-select').addEventListener('change', handleRatioChange);
+    
+    // File selection change handler for preview (single file only)
+    document.getElementById('display-file').addEventListener('change', () => handleFileSelectionChange(1));
+    // display-file2 is disabled (dual video mode disabled)
+    
+    // Preview buttons
+    document.getElementById('refresh-preview-btn').addEventListener('click', refreshPreviews);
+    document.getElementById('clear-preview-btn').addEventListener('click', clearAllPreviews);
+    
+    // Log buttons
+    document.getElementById('view-log-btn').addEventListener('click', viewLog);
+    document.getElementById('clear-log-btn').addEventListener('click', clearDebugLog);
+    document.getElementById('open-log-folder-btn').addEventListener('click', openLogFolder);
+    
+    // Keepalive buttons
+    document.getElementById('stop-keepalive-btn').addEventListener('click', stopKeepalive);
+    document.getElementById('refresh-keepalive-status-btn').addEventListener('click', updateKeepaliveStatus);
+    
     // Brightness slider
     document.getElementById('brightness-slider').addEventListener('input', (e) => {
         document.getElementById('brightness-value').textContent = e.target.value;
@@ -73,6 +97,11 @@ function initializeEventListeners() {
     // Listen for daemon logs from main process
     window.electronAPI.onDaemonLog((log) => {
         addLogEntry(log);
+    });
+    
+    // Listen for keepalive status updates from main process
+    window.electronAPI.onKeepaliveStatus((status) => {
+        updateKeepaliveStatusUI(status);
     });
 
     // Info tab
@@ -114,7 +143,7 @@ async function loadDisplayFiles() {
         const result = await window.electronAPI.listMedia();
 
         if (result.success && result.files.length > 0) {
-            // Clear existing options except the first one
+            // Clear existing options
             selectEl.innerHTML = '<option value="">-- Select a media file --</option>';
             
             // Add media files as options
@@ -128,6 +157,8 @@ async function loadDisplayFiles() {
             // Restore previous selection if it still exists
             if (currentValue && result.files.includes(currentValue)) {
                 selectEl.value = currentValue;
+                // Reload preview for file 1 if it was restored
+                showPreview(1, currentValue);
             }
             
             displayFilesLoaded = true;
@@ -184,14 +215,17 @@ async function uploadFile() {
 
 async function setDisplay() {
     const displayFile = document.getElementById('display-file').value;
+    const ratio = document.getElementById('ratio-select').value;
     
     if (!displayFile || displayFile === '') {
         showToast('Please select a media file', 'error');
         return;
     }
+    
+    // Single file only (aspect ratio locked to 2:1)
+    const files = [displayFile];
 
     const brightness = parseInt(document.getElementById('brightness-slider').value);
-    const ratio = document.getElementById('ratio-select').value;
     const keepalive = document.getElementById('keepalive-check').checked;
 
     const setBtn = document.getElementById('set-display-btn');
@@ -200,7 +234,7 @@ async function setDisplay() {
 
     try {
         const result = await window.electronAPI.setDisplay({
-            files: [displayFile],
+            files: files,
             brightness,
             ratio,
             keepalive
@@ -209,6 +243,11 @@ async function setDisplay() {
         if (result.success) {
             showToast('Display set successfully!', 'success');
             showOutput('display-output', result.output);
+            
+            // Update keepalive status if keepalive was enabled
+            if (keepalive) {
+                setTimeout(() => updateKeepaliveStatus(), 1000);
+            }
         } else {
             showToast(`Failed: ${result.error}`, 'error');
             showOutput('display-output', result.error);
@@ -233,6 +272,216 @@ async function setBrightnessOnly() {
         if (result.success) {
             showToast(`Brightness set to ${brightness}%`, 'success');
             showOutput('display-output', result.output);
+        } else {
+            showToast(`Failed: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+// Handle ratio selection change (locked to 2:1, dual video disabled)
+function handleRatioChange() {
+    // Aspect ratio is locked to 2:1, dual video is disabled
+    // Keep this function for compatibility but it doesn't need to do anything
+    const file2Group = document.getElementById('display-file2-group');
+    if (file2Group) {
+        file2Group.style.display = 'none';
+    }
+}
+
+// Preview Management Functions
+async function showPreview(fileNum, filename) {
+    if (!filename) {
+        clearPreview(fileNum);
+        return;
+    }
+    
+    const previewCard = document.getElementById('preview-card');
+    const previewInfo = document.getElementById(`preview-info-${fileNum}`);
+    const videoEl = document.getElementById(`preview-video-${fileNum}`);
+    const imageEl = document.getElementById(`preview-image-${fileNum}`);
+    const fileInfo = document.getElementById(`preview-file-info-${fileNum}`);
+    
+    try {
+        // Show loading state
+        if (previewInfo) {
+            previewInfo.textContent = '⏳ Loading preview...';
+            previewInfo.style.display = 'block';
+        }
+        videoEl.style.display = 'none';
+        imageEl.style.display = 'none';
+        previewCard.style.display = 'block';
+        
+        // Get preview file from device
+        const result = await window.electronAPI.getMediaPreview(filename);
+        
+        if (result.success) {
+            const fileUrl = `file://${result.path}`;
+            
+            if (result.type === 'video') {
+                // Show video preview
+                videoEl.src = fileUrl;
+                videoEl.style.display = 'block';
+                imageEl.style.display = 'none';
+                if (previewInfo) previewInfo.style.display = 'none';
+            } else {
+                // Show image preview
+                imageEl.src = fileUrl;
+                imageEl.style.display = 'block';
+                videoEl.style.display = 'none';
+                if (previewInfo) previewInfo.style.display = 'none';
+            }
+            
+            // Update file info text
+            if (fileInfo) {
+                fileInfo.textContent = `📁 ${result.filename} (${result.size} MB)`;
+            }
+        } else {
+            throw new Error(result.message || 'Failed to load preview');
+        }
+    } catch (error) {
+        console.error(`Preview error for file ${fileNum}:`, error);
+        showToast(`Failed to load preview: ${error.message}`, 'error');
+        if (previewInfo) {
+            previewInfo.textContent = '❌ Failed to load preview';
+            previewInfo.style.display = 'block';
+        }
+    }
+}
+
+function clearPreview(fileNum) {
+    const videoEl = document.getElementById(`preview-video-${fileNum}`);
+    const imageEl = document.getElementById(`preview-image-${fileNum}`);
+    const previewInfo = document.getElementById(`preview-info-${fileNum}`);
+    const fileInfo = document.getElementById(`preview-file-info-${fileNum}`);
+    
+    if (videoEl) {
+        videoEl.pause();
+        videoEl.src = '';
+        videoEl.style.display = 'none';
+    }
+    
+    if (imageEl) {
+        imageEl.src = '';
+        imageEl.style.display = 'none';
+    }
+    
+    if (previewInfo) {
+        previewInfo.textContent = fileNum === 1 ? 'Select a file to preview' : 'Select second file to preview';
+        previewInfo.style.display = 'block';
+    }
+    
+    if (fileInfo) {
+        fileInfo.textContent = '';
+    }
+    
+    // Hide preview card if both previews are cleared
+    const ratio = document.getElementById('ratio-select').value;
+    const video1 = document.getElementById('preview-video-1');
+    const image1 = document.getElementById('preview-image-1');
+    const video2 = document.getElementById('preview-video-2');
+    const image2 = document.getElementById('preview-image-2');
+    
+    const hasPreview1 = (video1.style.display !== 'none' && video1.src) || 
+                       (image1.style.display !== 'none' && image1.src);
+    const hasPreview2 = (video2.style.display !== 'none' && video2.src) || 
+                       (image2.style.display !== 'none' && image2.src);
+    
+    if (!hasPreview1 && (ratio !== '1:1' || !hasPreview2)) {
+        document.getElementById('preview-card').style.display = 'none';
+    }
+}
+
+function clearAllPreviews() {
+    clearPreview(1);
+    clearPreview(2);
+    document.getElementById('preview-card').style.display = 'none';
+}
+
+function refreshPreviews() {
+    const file1 = document.getElementById('display-file').value;
+    
+    if (file1) {
+        showPreview(1, file1);
+    }
+}
+
+// Handle file selection changes for preview (single file only)
+function handleFileSelectionChange(fileNum) {
+    const selectEl = document.getElementById('display-file');
+    
+    const filename = selectEl.value;
+    showPreview(fileNum, filename);
+}
+
+// Keepalive Management Functions
+async function updateKeepaliveStatus() {
+    try {
+        const result = await window.electronAPI.keepaliveStatus();
+        
+        if (result.success) {
+            const card = document.getElementById('keepalive-status-card');
+            
+            if (result.active) {
+                // Show card and update info
+                card.style.display = 'block';
+                
+                document.getElementById('keepalive-active-status').textContent = '✅ Active';
+                document.getElementById('keepalive-active-status').style.color = 'var(--success-color)';
+                document.getElementById('keepalive-count').textContent = result.count;
+                document.getElementById('keepalive-uptime').textContent = result.uptime;
+                document.getElementById('keepalive-interval-sec').textContent = result.interval;
+            } else {
+                // Hide card when not active
+                card.style.display = 'none';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to update keepalive status:', error);
+    }
+}
+
+function updateKeepaliveStatusUI(status) {
+    const card = document.getElementById('keepalive-status-card');
+    const lastMessage = document.getElementById('keepalive-last-message');
+    
+    if (status.active) {
+        card.style.display = 'block';
+        
+        if (status.success) {
+            lastMessage.textContent = `✅ ${status.message}`;
+            lastMessage.style.color = 'var(--success-color)';
+        } else {
+            lastMessage.textContent = `❌ ${status.message}`;
+            lastMessage.style.color = 'var(--danger-color)';
+        }
+        
+        // Update count
+        if (status.count !== undefined) {
+            document.getElementById('keepalive-count').textContent = status.count;
+        }
+    } else {
+        card.style.display = 'none';
+        showToast('Keepalive stopped', 'info');
+    }
+}
+
+async function stopKeepalive() {
+    const btn = document.getElementById('stop-keepalive-btn');
+    btn.disabled = true;
+    
+    try {
+        const result = await window.electronAPI.keepaliveStop();
+        
+        if (result.success) {
+            showToast('Keepalive stopped', 'success');
+            
+            // Hide the status card
+            const card = document.getElementById('keepalive-status-card');
+            card.style.display = 'none';
         } else {
             showToast(`Failed: ${result.error}`, 'error');
         }
@@ -594,4 +843,92 @@ function showOutput(outputId, content) {
     const outputEl = document.getElementById(outputId);
     outputEl.style.display = 'block';
     outputEl.textContent = content;
+}
+
+// Log Management Functions
+async function loadLogPath() {
+    try {
+        const result = await window.electronAPI.getLogPath();
+        if (result.success) {
+            document.getElementById('log-file-path').value = result.path;
+        }
+    } catch (error) {
+        console.error('Failed to load log path:', error);
+    }
+}
+
+async function viewLog() {
+    const btn = document.getElementById('view-log-btn');
+    const viewer = document.getElementById('log-viewer');
+    
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    
+    try {
+        const result = await window.electronAPI.readLog();
+        
+        if (result.success) {
+            viewer.style.display = 'block';
+            viewer.textContent = result.content || 'Log file is empty';
+            
+            // Auto-scroll to bottom
+            viewer.scrollTop = viewer.scrollHeight;
+            
+            showToast('Log loaded', 'success');
+        } else {
+            showToast(`Failed to read log: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '📄 View Log';
+    }
+}
+
+async function clearDebugLog() {
+    const confirmed = confirm('Clear the debug log file? This cannot be undone.');
+    
+    if (!confirmed) return;
+    
+    const btn = document.getElementById('clear-log-btn');
+    btn.disabled = true;
+    
+    try {
+        const result = await window.electronAPI.clearLog();
+        
+        if (result.success) {
+            const viewer = document.getElementById('log-viewer');
+            viewer.textContent = 'Log file cleared';
+            showToast('Log file cleared', 'success');
+        } else {
+            showToast(`Failed to clear log: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function openLogFolder() {
+    try {
+        const result = await window.electronAPI.getLogPath();
+        
+        if (result.success && result.dir) {
+            // Use xdg-open to open the folder in file manager
+            const { exec } = require('child_process');
+            showToast(`Log folder: ${result.dir}`, 'info');
+            
+            // Copy path to clipboard if possible
+            if (navigator.clipboard) {
+                await navigator.clipboard.writeText(result.dir);
+                showToast('Log folder path copied to clipboard', 'success');
+            }
+        } else {
+            showToast('Failed to get log folder path', 'error');
+        }
+    } catch (error) {
+        showToast(`Error: ${error.message}`, 'error');
+    }
 }

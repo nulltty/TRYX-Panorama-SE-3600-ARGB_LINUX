@@ -1,0 +1,60 @@
+{
+  "name": "reed-tpse-desktop",
+  "version": "1.0.0",
+  "description": "Desktop GUI for Tryx Panorama SE AIO cooler display controller",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:linux": "electron-builder --linux",
+    "build:deb": "electron-builder --linux deb",
+    "build:rpm": "electron-builder --linux rpm",
+    "build:appimage": "electron-builder --linux AppImage"
+  },
+  "keywords": [
+    "tryx",
+    "panorama",
+    "aio",
+    "cooler",
+    "display",
+    "rgb",
+    "linux"
+  ],
+  "homepage": "https://github.com/reed-tpse/reed-tpse",
+  "author": {
+    "name": "reed-tpse contributors",
+    "email": "contact@reed-tpse.dev"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/reed-tpse/reed-tpse.git"
+  },
+  "dependencies": {
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.reed-tpse.desktop",
+    "productName": "tryx-panorama-se-controller",
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility",
+      "icon": "assets/icon.png",
+      "maintainer": "reed-tpse contributors <contact@reed-tpse.dev>",
+      "vendor": "reed-tpse",
+      "synopsis": "Controller for Tryx Panorama SE AIO display",
+      "description": "Desktop application for controlling Tryx Panorama SE AIO cooler display with serial communication and media management"
+    },
+    "files": [
+      "**/*",
+      "!**/*.md",
+      "!assets/*.svg"
+    ]
+  }
+}

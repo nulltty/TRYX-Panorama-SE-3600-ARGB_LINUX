@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <title>Tryx Panorama SE Controller</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>🖥️ Tryx Panorama SE Controller</h1>
+            <div class="status-bar">
+                <span id="connection-status" class="status-badge disconnected">Disconnected</span>
+                <span id="daemon-status" class="status-badge inactive">Daemon Inactive</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar Navigation -->
+            <nav class="sidebar">
+                <button class="nav-btn active" data-tab="display">
+                    <span class="icon">📺</span>
+                    Display
+                </button>
+                <button class="nav-btn" data-tab="media">
+                    <span class="icon">📁</span>
+                    Media Library
+                </button>
+                <button class="nav-btn" data-tab="settings">
+                    <span class="icon">⚙️</span>
+                    Settings
+                </button>
+                <button class="nav-btn" data-tab="daemon">
+                    <span class="icon">🔄</span>
+                    Daemon
+                </button>
+                <button class="nav-btn" data-tab="info">
+                    <span class="icon">ℹ️</span>
+                    Device Info
+                </button>
+            </nav>
+
+            <!-- Content Area -->
+            <div class="content-area">
+                <!-- Display Tab -->
+                <div id="display-tab" class="tab-content active">
+                    <h2>Display Control</h2>
+                    
+                    <div class="card">
+                        <h3>Upload & Display Media</h3>
+                        
+                        <div class="form-group">
+                            <label>Select Media File:</label>
+                            <div class="file-input-group">
+                                <input type="text" id="file-path" placeholder="No file selected" readonly>
+                                <button id="browse-btn" class="btn btn-secondary">Browse</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <button id="upload-btn" class="btn btn-primary" disabled>Upload File</button>
+                        </div>
+
+                        <div class="divider"></div>
+
+                        <h3>Set Display</h3>
+                        
+                        <div class="form-group">
+                            <label for="display-file">Media File on Device:</label>
+                            <div class="file-input-group">
+                                <select id="display-file">
+                                    <option value="">-- Select a media file --</option>
+                                </select>
+                                <button id="refresh-display-files-btn" class="btn btn-secondary">🔄</button>
+                            </div>
+                            <small>Select from files on the device (auto-loads when tab opens)</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="brightness-slider">Brightness: <span id="brightness-value">75</span>%</label>
+                            <input type="range" id="brightness-slider" min="0" max="100" value="75" class="slider">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ratio-select">Aspect Ratio:</label>
+                            <select id="ratio-select">
+                                <option value="2:1" selected>2:1 (Wide)</option>
+                                <option value="1:1">1:1 (Square)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="keepalive-check">
+                                Keep connection alive
+                            </label>
+                        </div>
+
+                        <div class="form-group">
+                            <button id="set-display-btn" class="btn btn-primary">Set Display</button>
+                            <button id="set-brightness-btn" class="btn btn-secondary">Set Brightness Only</button>
+                        </div>
+                    </div>
+
+                    <div id="display-output" class="output-box" style="display: none;"></div>
+                </div>
+
+                <!-- Media Library Tab -->
+                <div id="media-tab" class="tab-content">
+                    <h2>Media Library</h2>
+                    
+                    <div class="card">
+                        <div class="toolbar">
+                            <button id="refresh-media-btn" class="btn btn-secondary">🔄 Refresh</button>
+                            <button id="delete-selected-btn" class="btn btn-danger" disabled>🗑️ Delete Selected</button>
+                        </div>
+
+                        <div id="media-list" class="media-list">
+                            <p class="text-muted">Click Refresh to load media files...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div id="settings-tab" class="tab-content">
+                    <h2>Settings</h2>
+                    
+                    <div class="card">
+                        <h3>Configuration</h3>
+
+                        <div class="form-group">
+                            <label for="port-input">Serial Port (leave empty for auto-detect):</label>
+                            <input type="text" id="port-input" placeholder="/dev/ttyACM0">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="default-brightness">Default Brightness:</label>
+                            <input type="number" id="default-brightness" min="0" max="100" value="75">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="keepalive-interval">Keepalive Interval (seconds):</label>
+                            <input type="number" id="keepalive-interval" min="1" max="60" value="10">
+                        </div>
+
+                        <div class="form-group">
+                            <button id="save-config-btn" class="btn btn-primary">Save Configuration</button>
+                            <button id="load-config-btn" class="btn btn-secondary">Load Configuration</button>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3>Device Management</h3>
+                        
+                        <div class="form-group">
+                            <label>ADB Device Status:</label>
+                            <button id="validate-device-btn" class="btn btn-secondary">🔍 Check Device</button>
+                            <div id="device-validation-output" class="output-box" style="display: none; margin-top: 10px;"></div>
+                        </div>
+                        
+                        <div class="divider"></div>
+                        
+                        <div class="form-group">
+                            <label>Reboot Device:</label>
+                            <p class="text-muted">Reboot the Tryx Panorama SE device via ADB</p>
+                            <button id="reboot-device-btn" class="btn btn-danger">🔄 Reboot Device</button>
+                        </div>
+                    </div>
+
+                    <div id="settings-output" class="output-box" style="display: none;"></div>
+                </div>
+
+                <!-- Daemon Tab -->
+                <div id="daemon-tab" class="tab-content">
+                    <h2>Daemon Control</h2>
+                    
+                    <div class="card">
+                        <p>The daemon keeps your display settings persistent across system reboots by running a background service.</p>
+
+                        <div class="daemon-controls">
+                            <button id="daemon-start-btn" class="btn btn-success">▶️ Start Daemon</button>
+                            <button id="daemon-stop-btn" class="btn btn-danger">⏹️ Stop Daemon</button>
+                            <button id="daemon-status-btn" class="btn btn-secondary">📊 Check Status</button>
+                            <button id="daemon-clear-log-btn" class="btn btn-secondary">🗑️ Clear Logs</button>
+                        </div>
+
+                        <div class="form-group checkbox-group">
+                            <label>
+                                <input type="checkbox" id="foreground-check">
+                                Run in foreground (not as systemd service)
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="daemon-output" class="output-box" style="display: none;"></div>
+                    
+                    <div class="card">
+                        <h3>Daemon Logs</h3>
+                        <div id="daemon-logs" class="log-container">
+                            <p class="text-muted">No logs yet. Start daemon to see activity...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Device Info Tab -->
+                <div id="info-tab" class="tab-content">
+                    <h2>Device Information</h2>
+                    
+                    <div class="card">
+                        <button id="get-info-btn" class="btn btn-primary">🔍 Get Device Info</button>
+                    </div>
+
+                    <div id="info-output" class="output-box" style="display: none;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Tryx Panorama SE Controller for Linux</p>
+        </footer>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

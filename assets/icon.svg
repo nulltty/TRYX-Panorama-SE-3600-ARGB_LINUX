@@ -1,0 +1,31 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="256" cy="256" r="240" fill="#2563eb"/>
+  
+  <!-- Monitor Frame -->
+  <rect x="96" y="120" width="320" height="200" rx="12" fill="#1e293b" stroke="#cbd5e1" stroke-width="8"/>
+  
+  <!-- Screen -->
+  <rect x="116" y="140" width="280" height="160" rx="4" fill="#0f172a"/>
+  
+  <!-- Screen Content (gradient) -->
+  <defs>
+    <linearGradient id="screenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <rect x="126" y="150" width="260" height="140" rx="2" fill="url(#screenGrad)"/>
+  
+  <!-- Play Button -->
+  <circle cx="256" cy="220" r="30" fill="#ffffff" opacity="0.9"/>
+  <polygon points="246,210 246,230 270,220" fill="#2563eb"/>
+  
+  <!-- Monitor Base -->
+  <rect x="226" y="320" width="60" height="24" rx="4" fill="#475569"/>
+  <rect x="196" y="344" width="120" height="12" rx="6" fill="#64748b"/>
+  
+  <!-- Connection Indicator -->
+  <circle cx="420" cy="420" r="32" fill="#10b981"/>
+  <path d="M 410 420 L 418 428 L 432 410" stroke="#ffffff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
